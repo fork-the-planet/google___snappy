@@ -74,7 +74,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -195,11 +194,6 @@ inline uint16_t* TableEntry8ByteMatch(uint16_t* table, uint64_t bytes,
 }  // namespace
 
 size_t MaxCompressedLength(size_t source_bytes) {
-  // Avoid integer overflow that could cause undersized buffer allocations.
-  // Return std::numeric_limits<size_t>::max() to force a controlled allocation failure.
-  if (source_bytes > (std::numeric_limits<size_t>::max() - 32) / 7 * 6) {
-    return std::numeric_limits<size_t>::max();
-  }
   // Compressed data can be defined as:
   //    compressed := item* literal*
   //    item       := literal* copy
