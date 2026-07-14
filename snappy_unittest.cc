@@ -790,6 +790,61 @@ TEST(Snappy, ZeroOffsetCopyValidation) {
   EXPECT_FALSE(snappy::IsValidCompressedBuffer(compressed, 4));
 }
 
+// A 4-byte extended literal length of 0xffffffff decodes as length =
+// 0xffffffff + 1.  In correct (64-bit or overflow-checked) arithmetic this is
+// 4294967296, which exceeds the source buffer and must be rejected.  In
+// vulnerable 32-bit unsigned arithmetic the +1 wraps to 0, causing the
+// decoder to skip the literal entirely and continue, silently producing
+// wrong output that happens to match the preamble length (65536).
+//
+// Payload structure:
+//   Bytes 0-2:     Varint 0x80 0x80 0x04 → expected length 65536
+//   Bytes 3-4:     Literal tag 0x00 + data 0x44 → 1-byte literal
+//   Bytes 5-784:   260× copy2 (0xfe 0x01 0x00) → 64 bytes from offset 1
+//   Bytes 785-786: Literal tag 0x00 + data 0x46 → 1-byte literal
+//   Bytes 787:     0xfc → literal tag with 4-byte length prefix (m=63)
+//   Bytes 788-791: 0xff 0xff 0xff 0xff → length-1 = 0xffffffff → +1 wraps
+//   Bytes 792+:    763× copy2 + 1× copy2(len=62) to fill remaining output
+TEST(Snappy, LiteralLengthU32Overflow) {
+  std::string compressed;
+  // Varint: expected output length 65536
+  compressed.push_back('\x80');
+  compressed.push_back('\x80');
+  compressed.push_back('\x04');
+  // 1-byte literal (0x44)
+  AppendLiteral(&compressed, "D");
+  // 260 copy2 elements: each copies 64 bytes from offset 1
+  // Output after this section: 1 + 260*64 = 16641
+  for (int i = 0; i < 260; i++) {
+    AppendCopy(&compressed, 1, 64);
+  }
+  // 1-byte literal (0x46)
+  AppendLiteral(&compressed, "F");
+  // Output so far (if wrapping): 16642
+
+  // Poison literal: tag 0xfc (m=63 → 4-byte extended length), length bytes
+  // 0xffffffff.  Correct length = 0xffffffff + 1 = 4294967296.
+  // Wrapping length = 0.
+  compressed.push_back('\xfc');  // literal tag, 4 extra length bytes
+  compressed.push_back('\xff');
+  compressed.push_back('\xff');
+  compressed.push_back('\xff');
+  compressed.push_back('\xff');
+
+  // Remaining copies to fill output to 65536 if the literal is skipped:
+  // 65536 - 16642 = 48894 = 763*64 + 62
+  for (int i = 0; i < 763; i++) {
+    AppendCopy(&compressed, 1, 64);
+  }
+  AppendCopy(&compressed, 1, 62);
+
+  std::string uncompressed;
+  EXPECT_FALSE(snappy::Uncompress(compressed.data(), compressed.size(),
+                                  &uncompressed));
+  EXPECT_FALSE(snappy::IsValidCompressedBuffer(compressed.data(),
+                                               compressed.size()));
+}
+
 int TestFindMatchLength(const char* s1, const char *s2, unsigned length) {
   uint64_t data;
   std::pair<size_t, bool> p =

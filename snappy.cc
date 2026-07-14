@@ -1687,9 +1687,13 @@ class SnappyDecompressor {
         if (SNAPPY_PREDICT_FALSE(literal_length >= 61)) {
           // Long literal.
           const size_t literal_length_length = literal_length - 60;
+          // NOTE: literal_length might be equal 2^32 (i.e. ExtractLowBytes
+          // returns 0xFFFFFFFF); this is implicitly invalid stream (since
+          // uncompressed length is capped with 0xFFFFFFFF); for performance we
+          // do not check for this case here.
           literal_length =
               ExtractLowBytes(LittleEndian::Load32(ip), literal_length_length) +
-              1;
+              size_t{1};
           ip += literal_length_length;
         }
 
